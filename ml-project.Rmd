@@ -1,0 +1,147 @@
+---
+title: "Human Activity Recognition - Weight Lifting Exercises"
+author: "Daniel Pöhle"
+date: "Friday, April 24, 2015"
+output: html_document
+---
+
+## Executive Summary
+
+We train a machine learning algorithm (random forest) for prediction if a weight lifting exercise was done correctly or with a mistake using data from a Brasilian study. The final model (using 65 selected features) has very high prediction accuracy for the test data (99,87%). For the distinction of correct exercise (class A) versus exercise with a mistake (classes B to E) the area under the curve (AOC) is 0.9998.
+
+## Introduction
+This paper is about training a machine learning algorithm for Human Activity Recognition (HAR). Six persons did Weight Lifting Exercises and it was inspected "how (well)" the excersise was performed by the person. The Six participants were asked to perform one set of 10 repetitions of the exercise "Unilateral Dumbbell Biceps Curl" in five different fashions: exactly according to the specification (Class A) and four common mistakes (Class B to E). The dataset is from Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013, (Access via http://groupware.les.inf.pucrio.br/har).
+
+## Data Preparation
+At first we load the dataset and make some preparations to get a tidy data set:
+```{r, echo=TRUE, warning=FALSE, message=FALSE}
+setwd("D:/RFiles/Coursera/ml")
+library(ggplot2)
+library(grid)
+library(doParallel)
+library(caret)
+library(pROC)
+
+training <- read.csv(file = "pml-training.csv", stringsAsFactors = F)
+processedTraining <- training[, unlist(lapply(training, class)) != "character"]
+processedTraining <- cbind(training$user_name, training$cvtd_timestamp, training$new_window, processedTraining, stringsAsFactors = F)
+
+
+processedTraining$kurtosis_roll_belt <- as.numeric(training$kurtosis_roll_belt)
+processedTraining$kurtosis_picth_belt <- as.numeric(training$kurtosis_picth_belt)
+processedTraining$kurtosis_yaw_belt <- !(training$kurtosis_yaw_belt == "")
+processedTraining$skewness_roll_belt <- as.numeric(training$skewness_roll_belt)
+processedTraining$skewness_roll_belt.1 <- as.numeric(training$skewness_roll_belt.1)
+processedTraining$skewness_yaw_belt <- !(training$skewness_yaw_belt == "")
+processedTraining$max_yaw_belt <- as.numeric(training$max_yaw_belt)
+processedTraining$min_yaw_belt <- as.numeric(training$min_yaw_belt)
+processedTraining$amplitude_yaw_belt <- as.factor(training$amplitude_yaw_belt)
+processedTraining$kurtosis_roll_arm <- as.numeric(training$kurtosis_roll_arm)           
+processedTraining$kurtosis_picth_arm <- as.numeric(training$kurtosis_picth_arm)          
+processedTraining$kurtosis_yaw_arm <- as.numeric(training$kurtosis_yaw_arm)              
+processedTraining$skewness_roll_arm <- as.numeric(training$skewness_roll_arm)            
+processedTraining$skewness_pitch_arm <- as.numeric(training$skewness_pitch_arm)         
+processedTraining$skewness_yaw_arm <- as.numeric(training$skewness_yaw_arm)              
+processedTraining$kurtosis_roll_dumbbell <- as.numeric(training$kurtosis_roll_dumbbell)  
+processedTraining$kurtosis_picth_dumbbell <- as.numeric(training$kurtosis_picth_dumbbell)
+processedTraining$kurtosis_yaw_dumbbell <- !(training$kurtosis_yaw_dumbbell == "")    
+processedTraining$skewness_roll_dumbbell <- as.numeric(training$skewness_roll_dumbbell)  
+processedTraining$skewness_pitch_dumbbell <- as.numeric(training$skewness_pitch_dumbbell)
+processedTraining$skewness_yaw_dumbbell <- !(training$skewness_yaw_dumbbell == "")   
+processedTraining$max_yaw_dumbbell <- as.numeric(training$max_yaw_dumbbell)              
+processedTraining$min_yaw_dumbbell <- as.numeric(training$min_yaw_dumbbell)              
+processedTraining$amplitude_yaw_dumbbell <- as.factor(training$amplitude_yaw_dumbbell)  
+processedTraining$kurtosis_roll_forearm <- as.numeric(training$kurtosis_roll_forearm)    
+processedTraining$kurtosis_picth_forearm <- as.numeric(training$kurtosis_picth_forearm)  
+processedTraining$kurtosis_yaw_forearm <- !(training$kurtosis_yaw_forearm == "")     
+processedTraining$skewness_roll_forearm <- as.numeric(training$skewness_roll_forearm)    
+processedTraining$skewness_pitch_forearm <- as.numeric(training$skewness_pitch_forearm)  
+processedTraining$skewness_yaw_forearm <- !(training$skewness_yaw_forearm == "")      
+processedTraining$max_yaw_forearm <- as.numeric(training$max_yaw_forearm)                
+processedTraining$min_yaw_forearm <- as.numeric(training$min_yaw_forearm)                
+processedTraining$amplitude_yaw_forearm <- as.factor(training$amplitude_yaw_forearm)    
+processedTraining$classe <- as.factor(training$classe)  
+ 
+
+summary(processedTraining[,7:14])
+
+```
+
+We only showed the summary for the first eight columns with sensor data. Please note that the columns **max_roll_belt**, **max_picth_belt** and **min_roll_belt** have many NA-values.
+
+## Exploratiory Analysis
+
+In the data set are columns that have many NA-values which we will not include into our prediction model at first. Only if prediction accuracy is too low, we will use those columns with only very little information gain.
+```{r}
+excludeColumnId <- integer(0)
+for(j in 1:length(processedTraining[1,])){
+    if(sum(is.na(processedTraining[,j]))>10000){
+        excludeColumnId <- c(excludeColumnId, j)
+    }
+}
+processedTraining <- processedTraining[,-excludeColumnId]
+print(paste0("We exclude ", length(excludeColumnId), " columns due to NA's."))
+```
+
+To get an impression how the data is distributed in the different features we make some exploratory plots, here for the features **roll_belt** with **pitch_belt** and **yaw_belt** as an example:
+```{r}
+qplot(x = roll_belt, y = pitch_belt, color = classe, data = processedTraining)
+qplot(x = roll_belt, y = yaw_belt, color = classe, data = processedTraining)
+
+```
+
+It turns out that there are coherent areas in the plot that belong to the same class. Hence, there is good chance that the prediction model will get a high accuracy.
+
+## Prediction Model
+
+To evaluate our later prediction model we separate our data into a training set and a test set.
+```{r}
+set.seed(28)
+isTrain <- createDataPartition(y = processedTraining$classe, p = 0.80, list = F)
+
+trD <- processedTraining[isTrain,c(3,5:68)] # training data
+teD <- processedTraining[-isTrain,c(3,5:68)] # test data
+```
+
+We will take for prediction a random forest and use all variables (except those with too many NA's). For the training to avoid overfitting we do k-fold cross validation with k = 5. 
+```{r, eval = FALSE}
+cl <- makeCluster(3) # Parallel processing with 3 cores
+registerDoParallel(cl)
+
+# random forest with k-fold cross validation (k=5)
+fit1 <- train(processedTraining$classe[isTrain] ~ ., method = "rf", data = trD, 
+             trControl=trainControl(method="cv",number=5), prox=TRUE, allowParallel=TRUE)
+fit1$finalModel$confusion
+```
+
+```{r, echo = FALSE}
+fit1 <- readRDS(file = "150420_reducedFit.rds")
+fit1$finalModel$confusion
+```
+
+The final model has very high accuracy for the training data. Next we will evaluate the model's "real"" accuracy with unknown examples from the test set.
+
+## Prediction Results
+
+The confusion matrix for the random forest with the test set shows that the prediction is very accurate with 99,87%:
+```{r, warning = FALSE, message=FALSE}
+confusionMatrix(data = predict(fit1, teD), reference = processedTraining$classe[-isTrain])
+```
+
+Additionally, for the distinction of correct exercise (class A) versus exercise with a mistake (classes B to E) the ROC shows that the model can separate these two classes very accurate ( area under the curve AOC = 0.9998).
+```{r, warning=FALSE, message=FALSE}
+resp <- processedTraining$classe[-isTrain]
+resp[resp != "A"] <- "B"
+
+pred <- predict(fit1, teD)
+pred[pred != "A"] <- "B"
+
+plot(roc(response = as.numeric(resp), predictor = as.numeric(pred)))
+```
+
+## Conclusions
+
+Using the training set a random forest was trained to predict if a weight lifting exercise was done correctly or with a mistake. It turns out that the training including only columns without many NA-values is sufficient and there is no need to take additional features into account because the prediction accuracy for the test set is greater than 99%. We selected the following `r length(trD[1,])` features for training:
+```{r}
+names(trD)
+```
